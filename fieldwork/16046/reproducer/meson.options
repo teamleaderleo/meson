@@ -1,0 +1,1 @@
+option('backend', type: 'combo', choices: ['systemd', 'elogind'], value: 'systemd')
