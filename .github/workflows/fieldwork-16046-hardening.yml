@@ -1,0 +1,95 @@
+name: Fieldwork Meson 16046 option-key hardening
+
+on:
+  push:
+    branches:
+      - fieldwork/16046-source-option-dependency
+    paths:
+      - .github/workflows/fieldwork-16046-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  harden-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add conservative invalid-option guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('mesonbuild/ast/introspection.py')
+          text = path.read_text()
+          old = '''        key = OptionKey.from_string(args[0]).evolve(subproject=self.subproject)\n        try:\n            value = self.coredata.optstore.get_value_for(key)\n        except KeyError:\n            return UnknownValue()'''
+          new = '''        if ':' in args[0]:\n            return UnknownValue()\n        try:\n            key = OptionKey.from_string(args[0]).evolve(subproject=self.subproject)\n            value = self.coredata.optstore.get_value_for(key)\n        except (AssertionError, KeyError):\n            return UnknownValue()'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected option lookup block')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - name: Run focused source-introspection controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fieldwork/16046/results fieldwork/16046/invalid
+          python3 meson.py introspect --dependencies \
+            fieldwork/16046/reproducer/meson.build \
+            > fieldwork/16046/results/hardened-candidate.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('fieldwork/16046/results/hardened-candidate.json').read_text())
+          assert data == [{
+              'name': 'systemd',
+              'required': False,
+              'version': ['>= 209'],
+              'has_fallback': False,
+              'conditional': False,
+          }], data
+          PY
+
+          cat > fieldwork/16046/invalid/meson.build <<'EOF'
+          project('invalid-source-option')
+          dependency(get_option('bad:name'), required: false)
+          EOF
+          python3 meson.py introspect --dependencies \
+            fieldwork/16046/invalid/meson.build \
+            > fieldwork/16046/results/invalid-option.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('fieldwork/16046/results/invalid-option.json').read_text())
+          assert len(data) == 1 and data[0]['name'] == 'unknown', data
+          PY
+          python3 -m compileall -q mesonbuild
+          git diff --check
+
+      - name: Retain receipt and retire carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >> fieldwork/16046/receipt.md <<EOF
+
+          ## Invalid option syntax hardening
+
+          - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - Starting head: ${GITHUB_SHA}
+          - The source handler now returns \`UnknownValue\` for option strings containing a subproject separator or otherwise failing \`OptionKey\` construction.
+          - The project-defined \`logind\` option still resolves to \`systemd\`.
+          - \`get_option('bad:name')\` no longer widens source introspection into an assertion failure and remains unresolved.
+          - Gates: focused JSON assertions, \`python3 -m compileall -q mesonbuild\`, and \`git diff --check\`.
+          - Evidence class: target-executed focused path on Linux; not a full Meson gate.
+          EOF
+          rm .github/workflows/fieldwork-16046-hardening.yml
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git add mesonbuild/ast/introspection.py fieldwork/16046 .github/workflows/fieldwork-16046-hardening.yml
+          git commit -m "Keep invalid source option names unresolved"
+          git push origin HEAD:fieldwork/16046-source-option-dependency
