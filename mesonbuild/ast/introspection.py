@@ -103,10 +103,12 @@ class IntrospectionInterpreter(AstInterpreter):
         if len(args) != 1 or not isinstance(args[0], str):
             return UnknownValue()
 
-        key = OptionKey.from_string(args[0]).evolve(subproject=self.subproject)
+        if ':' in args[0]:
+            return UnknownValue()
         try:
+            key = OptionKey.from_string(args[0]).evolve(subproject=self.subproject)
             value = self.coredata.optstore.get_value_for(key)
-        except KeyError:
+        except (AssertionError, KeyError):
             return UnknownValue()
 
         # Source introspection can safely expose ordinary option primitives.
