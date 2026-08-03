@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [fieldwork] Resolve primitive project options during source introspection
+
+This is an apply-ready candidate, not an executed or upstreamed patch.
+
+--- a/mesonbuild/ast/introspection.py
++++ b/mesonbuild/ast/introspection.py
+@@
+         self.funcs.update({
+             'add_languages': self.func_add_languages,
+             'dependency': self.func_dependency,
++            'get_option': self.func_get_option,
+             'project': self.func_project,
+@@
+         })
++
++    def func_get_option(self, node: mparser.BaseNode,
++                        args: T.List[TYPE_var],
++                        kwargs: T.Dict[str, TYPE_var]) -> TYPE_var:
++        args = self.flatten_args(args)
++        if len(args) != 1 or not isinstance(args[0], str):
++            return UnknownValue()
++
++        key = OptionKey.from_string(args[0]).evolve(subproject=self.subproject)
++        try:
++            value = self.coredata.optstore.get_value_for(key)
++        except KeyError:
++            return UnknownValue()
++
++        # Source introspection can safely expose ordinary option primitives.
++        # Keep feature wrappers and any future structured values unresolved
++        # unless the AST interpreter learns their method semantics.
++        if isinstance(value, (str, bool, int)):
++            return value
++        if isinstance(value, list) and all(isinstance(i, (str, bool, int)) for i in value):
++            return value
++        return UnknownValue()
++
+--- /dev/null
++++ b/test cases/unit/160 source introspection option dependency/meson.options
+@@
++option('backend', type: 'combo', choices: ['systemd', 'elogind'], value: 'systemd')
+--- /dev/null
++++ b/test cases/unit/160 source introspection option dependency/meson.build
+@@
++project('source-option-dependency', 'c')
++dependency(get_option('backend'), version: '>= 209', required: false)
+--- /dev/null
++++ b/test cases/unit/160 source introspection option dependency/expected.json
+@@
++[
++  {
++    "name": "systemd",
++    "required": false,
++    "version": [">= 209"],
++    "has_fallback": false,
++    "conditional": false
++  }
++]
+
+Focused command shape:
+
+  python3 meson.py introspect --dependencies \
+    'test cases/unit/160 source introspection option dependency/meson.build'
+
+The exact test-suite registration should follow the current source-introspection
+unit-test helper rather than treating expected.json as an already wired test.
