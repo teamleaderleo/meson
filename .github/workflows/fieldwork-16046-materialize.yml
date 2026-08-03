@@ -1,9 +1,9 @@
 name: Fieldwork 16046 materialize source candidate
 
 on:
-  push:
+  pull_request:
     branches:
-      - fieldwork/16046-source-option-dependency
+      - master
   workflow_dispatch:
 
 permissions:
@@ -11,12 +11,13 @@ permissions:
 
 jobs:
   materialize:
-    if: github.repository == 'teamleaderleo/meson'
+    if: github.repository == 'teamleaderleo/meson' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     steps:
       - name: Check out packet branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          ref: fieldwork/16046-source-option-dependency
           fetch-depth: 0
           persist-credentials: true
 
