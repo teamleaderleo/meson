@@ -1,0 +1,8 @@
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+OK
+Meson build system 1.12.0.rc2 Unit Tests
+pytest not found, using unittest instead
+Total time: 0.175 seconds

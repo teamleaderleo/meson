@@ -319,12 +319,12 @@ class ConverterTarget:
     std_regex = re.compile(r'([-]{1,2}std=|/std:v?|[-]{1,2}std:)(.*)')
 
     def postprocess(self, output_target_map: OutputTargetMap, root_src_dir: Path, subdir: Path, install_prefix: Path, trace: CMakeTraceParser) -> None:
-        # Detect setting the C and C++ standard and do additional compiler args manipulation
+        # Detect setting the C, C++ and CUDA standard and do additional compiler args manipulation
 
         # https://github.com/python/mypy/issues/18826
         # However, we need to support versions of mypy that cannot deduce the
         # tuple either.
-        for i in T.cast('T.Tuple[Language, ...]', ('c', 'cpp')):
+        for i in T.cast('T.Tuple[Language, ...]', ('c', 'cpp', 'cuda')):
             if i not in self.compile_opts:
                 continue
 
