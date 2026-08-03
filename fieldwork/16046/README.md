@@ -1,44 +1,62 @@
-# Fieldwork: source dependency names from project options
+# Fieldwork: source dependency names derived from project options
 
 Upstream issue: https://github.com/mesonbuild/meson/issues/16046  
-Inspected source: `0b5b32e284709eb5b23ed30207fe978362d30a3d`  
+Inspected source base: `0b5b32e284709eb5b23ed30207fe978362d30a3d`  
 External contact: **not authorized and not performed**
 
 ## In simple words
 
-`meson introspect --dependencies meson.build` currently turns a dependency name derived from `get_option()` into the literal package name `unknown`. The option file has already been parsed, so the source interpreter can resolve ordinary project-option defaults instead of inventing that package name.
+`meson introspect --dependencies meson.build` evaluates build definitions without configuring a build directory. It already loads project option defaults, but the AST interpreter previously treated every `get_option()` call as unknown. When that value was passed to `dependency()`, JSON serialization turned the unresolved value into a real-looking dependency named `unknown`.
 
-## Current mechanism
+The fork now resolves only source-known primitive project option values. The report's `logind` combo option therefore produces `systemd`, while dynamic, missing, feature-wrapper, and unsupported structured values remain unresolved.
 
-- `IntrospectionInterpreter` handles `dependency()` and records its first argument.
-- Its base `AstInterpreter` maps `get_option()` to `func_do_nothing()`, which returns `UnknownValue`.
-- `IntrospectionEncoder` serializes `UnknownValue` as the JSON string `"unknown"`.
-- `func_project()` already calls `_load_option_file()`, so the option store contains source-known defaults before later statements are visited.
+## Implemented change
 
-## Candidate boundary
+`mesonbuild/ast/introspection.py` now:
 
-Map `get_option` in `IntrospectionInterpreter` to a source-only resolver that:
+- maps `get_option` to a source-introspection-specific handler;
+- requires one literal string option name;
+- resolves the option through the already-loaded `coredata.optstore` using the current subproject key;
+- returns only JSON-safe primitive values (`str`, `bool`, `int`, or lists of those primitives);
+- leaves unsupported values as `UnknownValue` rather than pretending to configure a build.
 
-1. accepts exactly one literal string option name;
-2. looks up the option in `coredata.optstore` with the current subproject key;
-3. returns only JSON-safe primitive option values (`str`, `bool`, `int`, or lists of those);
-4. returns `UnknownValue` for dynamic names, missing options, feature wrappers, or values the source interpreter cannot safely model.
+The production source commit is present on `fieldwork/16046-source-option-dependency`.
 
-This is intentionally narrower than the normal interpreter. It does not attempt to configure a build or evaluate feature-option methods.
+## Fixture correction
 
-## Required controls
+The first packet fixture incorrectly used `backend`, a built-in Meson option name. Before execution it was replaced with the actual project-defined shape from the report:
 
-- combo/string option default used as `dependency(get_option('backend'))` emits the selected default, never `unknown`;
-- an explicit source-introspection `-Dbackend=...` override wins if that interface supports project options;
-- dynamic or unavailable option names remain conditional/unknown without crashing;
-- literal dependencies and subproject options remain unchanged;
-- source introspection must never emit a dependency literally named `unknown` merely because its expression could not be evaluated.
+```meson
+option('logind', type: 'combo', choices: ['systemd', 'elogind'], value: 'systemd')
+```
 
-## Artifacts
+and:
 
-- `candidate.patch` contains the bounded implementation sketch and target-native test shape.
-- `reproducer/` is a network-free source tree for the issue behavior.
+```meson
+logind = get_option('logind')
+dependency(logind, version: '>= 209', required: false)
+```
+
+## Exact execution contract
+
+Against base `0b5b32e...`, the fixture must emit one dependency named `unknown`. Against the fork candidate, it must emit `systemd` with the same version, required, fallback, and conditional fields.
+
+The focused gate also compiles the Python package and runs `git diff --check`. Execution is carried by Fieldwork Round 005; no passing result is claimed until its retained receipt lands.
+
+## Hardening edge
+
+`OptionKey.from_string` assumes valid option syntax. Source introspection should remain conservative for invalid literal option names rather than widening its failure surface. After the principal base-versus-candidate result is retained, add an invalid-name control and return `UnknownValue` for syntax that cannot form an `OptionKey`.
+
+## Required compatibility controls
+
+- literal dependency name remains unchanged;
+- string/combo project option resolves;
+- missing or dynamic option name remains unresolved;
+- subproject option uses the correct subproject key;
+- feature options remain unresolved until their method semantics are modeled;
+- invalid literal option syntax does not crash source introspection;
+- no unresolved expression is silently presented as a confirmed package dependency.
 
 ## Evidence state
 
-`source-reviewed`; `target-test-prepared`; not executed in this environment. Promote only after Meson's unit suite and the focused source-introspection fixture pass on the fork.
+`source-implemented`; corrected focused fixture retained; target execution pending through Fieldwork Round 005. This is not yet a full Meson gate or an accepted upstream-ready patch.
