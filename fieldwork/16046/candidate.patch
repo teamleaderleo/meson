@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 Subject: [fieldwork] Resolve primitive project options during source introspection
 
-This is an apply-ready candidate, not an executed or upstreamed patch.
+Executed on the owned fork; not submitted upstream.
 
 --- a/mesonbuild/ast/introspection.py
 +++ b/mesonbuild/ast/introspection.py
@@ -10,58 +10,55 @@ This is an apply-ready candidate, not an executed or upstreamed patch.
              'add_languages': self.func_add_languages,
              'dependency': self.func_dependency,
 +            'get_option': self.func_get_option,
-             'project': self.func_project,
+             'executable': self.func_executable,
 @@
          })
 +
-+    def func_get_option(self, node: mparser.BaseNode,
++    def func_get_option(self, node: BaseNode,
 +                        args: T.List[TYPE_var],
 +                        kwargs: T.Dict[str, TYPE_var]) -> TYPE_var:
 +        args = self.flatten_args(args)
 +        if len(args) != 1 or not isinstance(args[0], str):
 +            return UnknownValue()
 +
-+        key = OptionKey.from_string(args[0]).evolve(subproject=self.subproject)
++        if ':' in args[0]:
++            return UnknownValue()
 +        try:
++            key = OptionKey.from_string(args[0]).evolve(subproject=self.subproject)
 +            value = self.coredata.optstore.get_value_for(key)
-+        except KeyError:
++        except (AssertionError, KeyError):
 +            return UnknownValue()
 +
 +        # Source introspection can safely expose ordinary option primitives.
-+        # Keep feature wrappers and any future structured values unresolved
-+        # unless the AST interpreter learns their method semantics.
++        # Keep feature wrappers and future structured values unresolved until
++        # the AST interpreter supports their method semantics.
 +        if isinstance(value, (str, bool, int)):
 +            return value
-+        if isinstance(value, list) and all(isinstance(i, (str, bool, int)) for i in value):
++        if isinstance(value, list) and all(isinstance(item, (str, bool, int)) for item in value):
 +            return value
 +        return UnknownValue()
 +
 --- /dev/null
-+++ b/test cases/unit/160 source introspection option dependency/meson.options
++++ b/fieldwork/16046/reproducer/meson.options
 @@
-+option('backend', type: 'combo', choices: ['systemd', 'elogind'], value: 'systemd')
++option('logind', type: 'combo', choices: ['systemd', 'elogind'], value: 'systemd')
 --- /dev/null
-+++ b/test cases/unit/160 source introspection option dependency/meson.build
++++ b/fieldwork/16046/reproducer/meson.build
 @@
 +project('source-option-dependency', 'c')
-+dependency(get_option('backend'), version: '>= 209', required: false)
++
++logind = get_option('logind')
++dependency(logind, version: '>= 209', required: false)
 --- /dev/null
-+++ b/test cases/unit/160 source introspection option dependency/expected.json
++++ b/fieldwork/16046/invalid/meson.build
 @@
-+[
-+  {
-+    "name": "systemd",
-+    "required": false,
-+    "version": [">= 209"],
-+    "has_fallback": false,
-+    "conditional": false
-+  }
-+]
++project('invalid-source-option')
++dependency(get_option('bad:name'), required: false)
 
-Focused command shape:
+Executed controls:
 
-  python3 meson.py introspect --dependencies \
-    'test cases/unit/160 source introspection option dependency/meson.build'
-
-The exact test-suite registration should follow the current source-introspection
-unit-test helper rather than treating expected.json as an already wired test.
+- exact base `0b5b32e...` emitted dependency name `unknown`;
+- candidate emitted `systemd` with unchanged metadata;
+- invalid literal option syntax remained unresolved without asserting;
+- `python3 -m compileall -q mesonbuild` passed;
+- `git diff --check` passed.
