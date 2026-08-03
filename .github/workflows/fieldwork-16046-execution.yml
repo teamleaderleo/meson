@@ -25,6 +25,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import os
+          import textwrap
           from pathlib import Path
 
           test = Path('unittests/sourceintrospectiontests.py')
@@ -101,38 +102,43 @@ if __name__ == '__main__':
                   1,
               )
 
-              old_mapping = """            'dependency': self.func_dependency,
-              'executable': self.func_executable,
-              """
-              new_mapping = """            'dependency': self.func_dependency,
-              'get_option': self.func_get_option,
-              'executable': self.func_executable,
-              """
+              old_mapping = (
+                  "            'dependency': self.func_dependency,\n"
+                  "            'executable': self.func_executable,\n"
+              )
+              new_mapping = (
+                  "            'dependency': self.func_dependency,\n"
+                  "            'get_option': self.func_get_option,\n"
+                  "            'executable': self.func_executable,\n"
+              )
               if source.count(old_mapping) != 1:
                   raise SystemExit(f'expected one function-map insertion point, found {source.count(old_mapping)}')
               source = source.replace(old_mapping, new_mapping, 1)
 
               insertion_point = '    def func_project(self, node: BaseNode, args: T.List[TYPE_var], kwargs: T.Dict[str, TYPE_var]) -> None:\n'
-              method = """    def func_get_option(self, node: BaseNode, args: T.List[TYPE_var], kwargs: T.Dict[str, TYPE_var]) -> TYPE_var:
-                  args = self.flatten_args(args)
-                  if kwargs or len(args) != 1 or not isinstance(args[0], str):
-                      return UnknownValue()
+              method = textwrap.dedent(
+                  """
+                      def func_get_option(self, node: BaseNode, args: T.List[TYPE_var], kwargs: T.Dict[str, TYPE_var]) -> TYPE_var:
+                          args = self.flatten_args(args)
+                          if kwargs or len(args) != 1 or not isinstance(args[0], str):
+                              return UnknownValue()
 
-                  key = OptionKey(args[0], self.subproject)
-                  try:
-                      option, value = self.coredata.optstore.get_option_and_value_for(key)
-                  except KeyError:
-                      return UnknownValue()
+                          key = OptionKey(args[0], self.subproject)
+                          try:
+                              option, value = self.coredata.optstore.get_option_and_value_for(key)
+                          except KeyError:
+                              return UnknownValue()
 
-                  if not self.coredata.optstore.is_project_option(key) or isinstance(option, UserFeatureOption):
-                      return UnknownValue()
-                  if isinstance(value, (str, bool, int)):
-                      return value
-                  if isinstance(value, list) and all(isinstance(item, str) for item in value):
-                      return value
-                  return UnknownValue()
+                          if not self.coredata.optstore.is_project_option(key) or isinstance(option, UserFeatureOption):
+                              return UnknownValue()
+                          if isinstance(value, (str, bool, int)):
+                              return value
+                          if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                              return value
+                          return UnknownValue()
 
-              """
+                  """
+              ).lstrip('\n')
               if source.count(insertion_point) != 1:
                   raise SystemExit(f'expected one method insertion point, found {source.count(insertion_point)}')
               source = source.replace(insertion_point, method + insertion_point, 1)
@@ -161,5 +167,9 @@ if __name__ == '__main__':
         run: |
           python3 -m compileall -q mesonbuild/ast/introspection.py unittests/sourceintrospectiontests.py
           git diff --check
-          test "$(git diff --name-only | sort)" = "mesonbuild/ast/introspection.py
-          unittests/sourceintrospectiontests.py"
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            mesonbuild/ast/introspection.py
+            unittests/sourceintrospectiontests.py
+          )
+          test "${changed[*]}" = "${expected[*]}"
