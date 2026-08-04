@@ -1,0 +1,47 @@
+name: Verify Meson 15998 precedence
+
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact source investigation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: teamleaderleo/meson
+          ref: 8418a967ba268d323477752fe4fc17e8cf8f8256
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source identity
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 8418a967ba268d323477752fe4fc17e8cf8f8256
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Run CUDA normalization and precedence controls
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          python3 run_unittests.py CMakeInterpreterTests.test_cuda_standard_is_normalized_as_cuda_override
+          python3 run_unittests.py CMakeInterpreterTests.test_explicit_subproject_cuda_override_replaces_discovered_standard
+
+      - name: Compile inspected Python sources
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q mesonbuild/cmake/common.py mesonbuild/cmake/interpreter.py unittests/cmakeinterpretertests.py
+          test "$(git rev-parse HEAD)" = 8418a967ba268d323477752fe4fc17e8cf8f8256
+          git diff --check
+          test -z "$(git status --porcelain)"
