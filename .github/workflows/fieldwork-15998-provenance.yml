@@ -1,0 +1,82 @@
+name: Verify Meson 15998 CUDA provenance policy
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - fieldwork/15998/PROVENANCE_EXECUTION_TRIGGER.md
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'execution/15998-cuda-provenance'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out immutable investigation packet
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: teamleaderleo/meson
+          ref: 3018ead551dc6f8902ab4b4e636dee4b97f31e55
+          path: packet
+          persist-credentials: false
+
+      - name: Check out exact baseline
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: teamleaderleo/meson
+          ref: 8418a967ba268d323477752fe4fc17e8cf8f8256
+          path: baseline
+          persist-credentials: false
+
+      - name: Check out exact candidate source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: teamleaderleo/meson
+          ref: 8418a967ba268d323477752fe4fc17e8cf8f8256
+          path: candidate
+          persist-credentials: false
+
+      - name: Apply baseline and candidate controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 packet/fieldwork/15998/apply_provenance_candidate.py baseline --tests-only
+          python3 packet/fieldwork/15998/apply_provenance_candidate.py candidate
+          git -C baseline diff --check
+          git -C candidate diff --check
+
+      - name: Require baseline behavioral failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          (cd baseline && python3 -m unittest unittests.cmakeinterpretertests) > baseline-output.txt 2>&1
+          status=$?
+          set -e
+          cat baseline-output.txt
+          test "$status" -ne 0
+          ! grep -Eq 'SyntaxError|ImportError|ModuleNotFoundError' baseline-output.txt
+          grep -q 'test_unexplained_cuda_standard_is_removed_without_override' baseline-output.txt
+          grep -q 'AssertionError' baseline-output.txt
+
+      - name: Run candidate controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd candidate
+          python3 -m unittest unittests.cmakeinterpretertests
+          python3 -m compileall -q mesonbuild/cmake unittests/cmakeinterpretertests.py
+          git diff --check
+          test "$(git diff --name-only | sort)" = $'mesonbuild/cmake/interpreter.py\nunittests/cmakeinterpretertests.py'
+
+      - name: Verify carrier remained read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline rev-parse HEAD)" = 8418a967ba268d323477752fe4fc17e8cf8f8256
+          test "$(git -C candidate rev-parse HEAD)" = 8418a967ba268d323477752fe4fc17e8cf8f8256
+          echo 'Meson 15998 provenance baseline/candidate matrix passed'
