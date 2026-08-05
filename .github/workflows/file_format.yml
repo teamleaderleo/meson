@@ -19,3 +19,150 @@ jobs:
         python-version: '3.x'
     - run: python3 ./run_format_tests.py
     - run: python3 ./run_shell_checks.py
+
+  fieldwork-16046-materialize:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+    - name: Check out exact packet head
+      uses: actions/checkout@v4
+      with:
+        ref: fieldwork/16046-source-option-dependency
+        fetch-depth: 0
+        persist-credentials: true
+    - name: Build and publish clean source candidate
+      env:
+        BASE_SHA: 0b5b32e284709eb5b23ed30207fe978362d30a3d
+        SOURCE_BRANCH: fix/16046-source-option-dependency
+      run: |
+        set -euo pipefail
+        git switch --force-create "$SOURCE_BRANCH" "$BASE_SHA"
+
+        python3 - <<'PY'
+        from pathlib import Path
+
+        path = Path('mesonbuild/ast/introspection.py')
+        source = path.read_text(encoding='utf-8')
+        source = source.replace(
+            'from ..options import OptionKey\n',
+            'from ..options import OptionKey, UserFeatureOption\n',
+            1,
+        )
+
+        old_mapping = """            'dependency': self.func_dependency,
+            'executable': self.func_executable,
+"""
+        new_mapping = """            'dependency': self.func_dependency,
+            'get_option': self.func_get_option,
+            'executable': self.func_executable,
+"""
+        if source.count(old_mapping) != 1:
+            raise SystemExit(f'expected one function-map insertion point, found {source.count(old_mapping)}')
+        source = source.replace(old_mapping, new_mapping, 1)
+
+        insertion_point = '    def func_project(self, node: BaseNode, args: T.List[TYPE_var], kwargs: T.Dict[str, TYPE_var]) -> None:\n'
+        method = """    def func_get_option(self, node: BaseNode, args: T.List[TYPE_var], kwargs: T.Dict[str, TYPE_var]) -> TYPE_var:
+        args = self.flatten_args(args)
+        if kwargs or len(args) != 1 or not isinstance(args[0], str):
+            return UnknownValue()
+
+        key = OptionKey(args[0], self.subproject)
+        try:
+            option, value = self.coredata.optstore.get_option_and_value_for(key)
+        except KeyError:
+            return UnknownValue()
+
+        if not self.coredata.optstore.is_project_option(key) or isinstance(option, UserFeatureOption):
+            return UnknownValue()
+        if isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            return value
+        return UnknownValue()
+
+"""
+        if source.count(insertion_point) != 1:
+            raise SystemExit(f'expected one method insertion point, found {source.count(insertion_point)}')
+        source = source.replace(insertion_point, method + insertion_point, 1)
+        path.write_text(source, encoding='utf-8')
+
+        Path('unittests/sourceintrospectiontests.py').write_text("""# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+from pathlib import Path
+import tempfile
+import unittest
+
+from mesonbuild.ast.introspection import IntrospectionInterpreter
+from mesonbuild.interpreterbase import UnknownValue
+
+
+class SourceIntrospectionTests(unittest.TestCase):
+    def analyze(self, meson_build: str, meson_options: str = '') -> IntrospectionInterpreter:
+        with tempfile.TemporaryDirectory() as temporary:
+            source_root = Path(temporary)
+            (source_root / 'meson.build').write_text(meson_build, encoding='utf-8')
+            if meson_options:
+                (source_root / 'meson.options').write_text(meson_options, encoding='utf-8')
+            interpreter = IntrospectionInterpreter(str(source_root), '', 'ninja')
+            interpreter.analyze()
+            return interpreter
+
+    def test_dependency_name_uses_project_combo_option_default(self) -> None:
+        interpreter = self.analyze(
+            "project('source-option-dependency')\n"
+            "dependency(get_option('dependency_backend'), required: false)\n",
+            "option('dependency_backend', type: 'combo', choices: ['systemd', 'elogind'], value: 'systemd')\n",
+        )
+        self.assertEqual(len(interpreter.dependencies), 1)
+        self.assertEqual(interpreter.dependencies[0].name, 'systemd')
+        self.assertFalse(interpreter.dependencies[0].required)
+
+    def test_dependency_name_uses_project_string_option_default(self) -> None:
+        interpreter = self.analyze(
+            "project('source-string-dependency')\n"
+            "dependency(get_option('dependency_backend'), required: false)\n",
+            "option('dependency_backend', type: 'string', value: 'libsystemd')\n",
+        )
+        self.assertEqual(interpreter.dependencies[0].name, 'libsystemd')
+
+    def test_feature_option_remains_unresolved(self) -> None:
+        interpreter = self.analyze(
+            "project('source-feature-dependency')\n"
+            "dependency(get_option('dependency_backend'), required: false)\n",
+            "option('dependency_backend', type: 'feature', value: 'auto')\n",
+        )
+        self.assertIsInstance(interpreter.dependencies[0].name, UnknownValue)
+
+    def test_missing_option_remains_unresolved(self) -> None:
+        interpreter = self.analyze(
+            "project('source-missing-dependency')\n"
+            "dependency(get_option('missing'), required: false)\n",
+        )
+        self.assertIsInstance(interpreter.dependencies[0].name, UnknownValue)
+
+
+if __name__ == '__main__':
+    unittest.main()
+""", encoding='utf-8')
+        PY
+
+        python3 -m unittest -v unittests.sourceintrospectiontests
+        python3 -m compileall -q mesonbuild/ast/introspection.py unittests/sourceintrospectiontests.py
+        git diff --check
+
+        mapfile -t changed < <(git status --short | sed 's/^...//' | sort)
+        expected=(mesonbuild/ast/introspection.py unittests/sourceintrospectiontests.py)
+        if [[ "${changed[*]}" != "${expected[*]}" ]]; then
+          printf 'unexpected changed files:\n%s\n' "${changed[*]}" >&2
+          exit 1
+        fi
+
+        git config user.name 'Fieldwork Materializer'
+        git config user.email 'fieldwork@example.invalid'
+        git add -- mesonbuild/ast/introspection.py unittests/sourceintrospectiontests.py
+        git commit -m 'fix(ast): resolve primitive project options in source introspection'
+        git push --force origin "HEAD:refs/heads/$SOURCE_BRANCH"

@@ -85,6 +85,7 @@ class IntrospectionInterpreter(AstInterpreter):
         self.funcs.update({
             'add_languages': self.func_add_languages,
             'dependency': self.func_dependency,
+            'get_option': self.func_get_option,
             'executable': self.func_executable,
             'jar': self.func_jar,
             'library': self.func_library,
@@ -94,6 +95,30 @@ class IntrospectionInterpreter(AstInterpreter):
             'static_library': self.func_static_lib,
             'both_libraries': self.func_both_lib,
         })
+
+    def func_get_option(self, node: BaseNode,
+                        args: T.List[TYPE_var],
+                        kwargs: T.Dict[str, TYPE_var]) -> TYPE_var:
+        args = self.flatten_args(args)
+        if len(args) != 1 or not isinstance(args[0], str):
+            return UnknownValue()
+
+        if ':' in args[0]:
+            return UnknownValue()
+        try:
+            key = OptionKey.from_string(args[0]).evolve(subproject=self.subproject)
+            value = self.coredata.optstore.get_value_for(key)
+        except (AssertionError, KeyError):
+            return UnknownValue()
+
+        # Source introspection can safely expose ordinary option primitives.
+        # Keep feature wrappers and future structured values unresolved until
+        # the AST interpreter supports their method semantics.
+        if isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, list) and all(isinstance(item, (str, bool, int)) for item in value):
+            return value
+        return UnknownValue()
 
     def func_project(self, node: BaseNode, args: T.List[TYPE_var], kwargs: T.Dict[str, TYPE_var]) -> None:
         if self.project_node:
