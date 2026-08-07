@@ -128,8 +128,8 @@ class CMakeInterpreterTests(TestCase):
             self.assertEqual(
                 converter.compile_opts['cuda'],
                 [
-                    '--generate-code=arch=compute_80,code=sm_80',
                     '-std=c++17',
+                    '--generate-code=arch=compute_80,code=sm_80',
                 ],
             )
 
@@ -189,7 +189,7 @@ class CMakeInterpreterTests(TestCase):
                 ['cuda_std=c++23'],
             )
 
-    def test_gnu_fallback_is_preserved_verbatim(self) -> None:
+    def test_gnu_fallback_is_preserved_verbatim_and_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             converter = self.make_cuda_converter(
                 Path(tempdir),
@@ -200,7 +200,13 @@ class CMakeInterpreterTests(TestCase):
 
             converter.settle_deferred_stds(options)
 
-            self.assertIn('-std=gnu++17', converter.compile_opts['cuda'])
+            self.assertEqual(
+                converter.compile_opts['cuda'],
+                [
+                    '-std=gnu++17',
+                    '--generate-code=arch=compute_80,code=sm_80',
+                ],
+            )
             self.assertEqual(converter.override_options, [])
 """,
         encoding="utf-8",
@@ -273,7 +279,7 @@ def apply_candidate(root: Path) -> None:
 
         # Effective standard flags whose ownership cannot be settled until
         # generated target options and the surrounding Meson default are known.
-        self.deferred_std_flags: T.Dict[Language, str] = {}
+        self.deferred_std_flags: T.Dict[Language, T.List[str]] = {}
 
         # Convert the target name to a valid meson target name
 """,
@@ -331,7 +337,8 @@ def apply_candidate(root: Path) -> None:
         """                    self.override_options += [f'{i}_std={std}']
 """,
         """                    if i == 'cuda' and not self._has_explicit_cmake_standard(trace_target, i, std):
-                        self.deferred_std_flags[i] = j
+                        self.deferred_std_flags.setdefault(i, []).append(j)
+                        temp += [j]
                     else:
                         self.override_options += [f'{i}_std={std}']
 """,
@@ -354,20 +361,25 @@ def apply_candidate(root: Path) -> None:
         """    def process_inter_target_dependencies(self) -> None:
 """,
         """    def settle_deferred_stds(self, target_options: 'TargetOptions') -> None:
-        for lang, flag in self.deferred_std_flags.items():
+        for lang, flags in self.deferred_std_flags.items():
             opt = f'{lang}_std'
-            if target_options.has_override_option(self.cmake_name, opt):
-                continue
+            has_replacement = target_options.has_override_option(self.cmake_name, opt)
 
-            try:
-                meson_std = self.env.coredata.optstore.get_value_for(
-                    OptionKey(opt, machine=self.for_machine),
-                )
-            except KeyError:
-                meson_std = 'none'
+            if not has_replacement:
+                try:
+                    meson_std = self.env.coredata.optstore.get_value_for(
+                        OptionKey(opt, machine=self.for_machine),
+                    )
+                except KeyError:
+                    meson_std = 'none'
+                has_replacement = meson_std != 'none'
 
-            if meson_std == 'none':
-                self.compile_opts[lang].append(flag)
+            if has_replacement:
+                for flag in flags:
+                    try:
+                        self.compile_opts[lang].remove(flag)
+                    except ValueError:
+                        pass
 
         self.deferred_std_flags.clear()
 
