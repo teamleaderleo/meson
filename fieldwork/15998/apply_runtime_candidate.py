@@ -3,8 +3,8 @@
 
 This is the authoritative entry point for an immutable public-base checkout.
 `apply_deferred_candidate.py` contains the implementation/test transformations;
-this wrapper first adds CUDA to the standard-classification loop that is absent
-from the public base.
+this wrapper first normalizes the two CUDA-classification anchors that are
+absent from the public base.
 """
 
 from __future__ import annotations
@@ -17,6 +17,14 @@ import apply_deferred_candidate as deferred
 
 def apply_candidate(root: Path) -> None:
     interpreter = root / "mesonbuild/cmake/interpreter.py"
+    deferred.replace_once(
+        interpreter,
+        """        # Detect setting the C and C++ standard and do additional compiler args manipulation
+""",
+        """        # Detect setting the C, C++ and CUDA standard and do additional compiler args manipulation
+""",
+        "include CUDA in standard-classification comment",
+    )
     deferred.replace_once(
         interpreter,
         """        for i in T.cast('T.Tuple[Language, ...]', ('c', 'cpp')):
