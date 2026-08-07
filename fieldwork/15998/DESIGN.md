@@ -2,9 +2,9 @@
 
 ## Current conclusion
 
-The one-line CUDA normalization candidate is a valid language-classification and duplicate-removal probe, but it does **not** satisfy the issue's precedence contract.
+The one-line CUDA normalization candidate is valid language-classification and duplicate-removal evidence, but it does **not** satisfy the issue's precedence contract.
 
-A second provenance-gated candidate was also rejected before execution. Provenance alone is insufficient: removing an unexplained effective CUDA standard is safe only when another authority will replace it.
+A second provenance-gated candidate was rejected before execution. Provenance alone is insufficient: removing an unexplained effective CUDA standard is safe only when another authority will replace it.
 
 A production policy therefore needs both:
 
@@ -28,22 +28,22 @@ Therefore:
 - an ordinary parent-project `cuda_std` loses to the one-line candidate's generated target override;
 - the one-line candidate cannot be described as fixing issue #15998.
 
-## New architecture finding: AST generation sees both late authorities
+## Architecture finding: generation time is still too early for Meson subproject options
 
-The converter and AST generator already split the relevant responsibilities in a useful way.
+`ConverterTarget.postprocess()` is too early to settle an unexplained File API CUDA standard. It only sees the effective CMake compile fragment plus trace information.
 
-`ConverterTarget.postprocess()` currently decides whether a File API `-std=` fragment becomes a generated target `override_options` entry. That is too early for an unexplained CUDA standard because it has not yet resolved replacement authority.
+A first deferred design then tried to settle the fragment while `CMakeInterpreter.pretend_to_be_meson()` generated the Meson AST. Static review rejected that timing too.
 
-Later, `CMakeInterpreter` generates the Meson target call and computes:
+The CMake flow is:
 
-- `override_options = options.get_override_options(tgt.cmake_name, tgt.override_options)`;
-- language compile arguments through `options.get_compile_args(...)`.
+1. `CMakeInterpreter` configures and analyses CMake;
+2. `pretend_to_be_meson()` generates a Meson AST;
+3. only then `_do_subproject_meson()` constructs the real Meson subproject `Interpreter` with the caller's `default_options`, command-line and machine-file option state;
+4. that interpreter parses `project()` and exposes the final subproject-scoped value through `get_option()` while executing the generated AST.
 
-`TargetOptions` contains both global and target-specific `cmake.subproject_options()` state, and its `SingleTargetOptions.opts` map is the exact late authority that replaces generated target options.
+`OptionStore.get_value_for(OptionKey('cuda_std', machine=...))` without a subproject key resolves the root/global compiler option. Per-subproject compiler values and augments can differ. Therefore an OptionStore query during CMake AST generation cannot be the production authority for the generated subproject.
 
-Separately, the interpreter retains `env.coredata.optstore`, which is already used by the converter to inspect language-standard option objects. That is the natural source for the effective surrounding Meson `cuda_std` value.
-
-This means the next candidate does **not** need to push Meson standards into CMake or guess replacement authority during File API parsing. The narrowest boundary is to defer only unexplained standard settlement until target AST generation.
+The narrow safe timing boundary is now: **record the unexplained fallback during conversion, but choose raw-versus-clean compile arguments in the generated Meson program itself**, using the generated subproject's runtime `get_option('cuda_std')`.
 
 ## Provenance sources available today
 
@@ -61,9 +61,9 @@ The parser retains final variables and per-file assignments, including directly 
 
 ### Meson project and subproject authority
 
-A generated target `cuda_std=...` override naturally outranks the parent project's default. Explicit global or target CMake-module overrides replace generated values later through `TargetOptions`.
+Explicit global or target `cmake.subproject_options()` values are already known at AST generation through `TargetOptions` and can statically suppress an unexplained fallback.
 
-The effective surrounding Meson standard is available from the option store, while explicit CMake-module overrides are available only later through `TargetOptions`. This stage split is why immediate normalization is unsafe and deferred settlement is attractive.
+Ordinary Meson compiler-option authority is different. The final subproject-scoped `cuda_std` is only reliable after the generated Meson subproject interpreter is constructed and its `project()` state is resolved. That value is available naturally to generated code via `get_option('cuda_std')`.
 
 ## Candidate policies
 
@@ -94,72 +94,76 @@ Blocking compatibility case:
 - no Meson parent/subproject `cuda_std` replacement authority;
 - File API reports the only effective CUDA standard.
 
-Policy B silently drops that standard and falls back to compiler defaults. A clean provenance test would not make that behavior safe.
+Policy B silently drops that standard and falls back to compiler defaults. Execution PR #6 and workflow run `31019630325` were retired while queued and are not behavior evidence.
 
-Execution PR #6 and workflow run `31019630325` were retired while queued. They are not behavior evidence. The temporary workflow was removed from the default branch.
+### Policy C1 — settle against OptionStore while generating the AST
 
-### Policy C — deferred settlement at AST generation
+Status: `REJECT BEFORE EXECUTION / RETAIN AS STATIC REVIEW FINDING`.
 
-Status: `SELECTED NEXT EXPERIMENT BOUNDARY / NOT YET PRODUCTION-ACCEPTED`.
+This generation correctly introduced replacement authority but queried it too early. A root/global `OptionKey('cuda_std')` does not prove the final value inside the generated CMake subproject, because subproject `default_options`, command-line augments, and machine-file augments are resolved when the real subproject interpreter is constructed after AST generation.
 
-Instead of immediately turning every effective CUDA standard into an override or deleting unexplained values, retain a small per-language deferred record on `ConverterTarget` containing:
+No carrier was created for C1 and it carries no behavior evidence.
 
-- the effective standard token;
-- whether reliable target-level CMake provenance exists;
-- enough information to remove the corresponding raw compile fragment only when settlement is decided.
+### Policy C2 — runtime-deferred fallback in generated Meson
 
-At target AST generation, settle the record in this order:
+Status: `SELECTED NEXT EXPERIMENT / TRANSFORMER PREPARED / UNEXECUTED`.
 
-1. **explicit target CMake provenance** — emit the generated `cuda_std=...` target override; a later explicit `cmake.subproject_options()` override can still replace it through existing `TargetOptions` behavior;
-2. **explicit global/target `cmake.subproject_options()` replacement** — suppress an unexplained fallback and let that explicit override win;
-3. **effective surrounding Meson `cuda_std` is non-`none`** — suppress the unexplained fallback and emit no generated target override, allowing the ordinary Meson project/subproject standard to remain authoritative;
-4. **no replacement authority** — preserve the effective CMake standard as a raw CUDA compile fallback rather than silently dropping to the compiler default.
+`fieldwork/15998/apply_deferred_candidate.py` now prepares this generation.
 
-This directly preserves both previously conflicting cases:
+Conversion behavior:
 
-- reporter case: parent Meson `cuda_std` replaces an unexplained effective CMake flag;
-- compatibility case: unexplained effective CMake standard survives when Meson supplies no replacement.
+1. reliable explicit target CMake `CUDA_STANDARD` or matching direct target `-std=` provenance becomes a generated `cuda_std=...` target override;
+2. a supported but unexplained effective CUDA `-std=` remains in the raw compile-argument list at its original position and is also recorded as deferred metadata;
+3. an unsupported CUDA `-std=` is retained raw rather than newly being discarded by CUDA normalization;
+4. unrelated CUDA arguments remain untouched.
 
-The implementation should add a small `TargetOptions` query helper rather than reach into `SingleTargetOptions.opts` from the interpreter. For example, `has_override_option(target, option)` can check global then target-specific state without changing existing precedence behavior.
+AST-generation behavior:
 
-Open semantic caveat: a directory/global `CMAKE_CUDA_STANDARD` that initialized a target is still not reliably distinguishable from an unexplained effective File API value using final trace-variable state alone. Policy C therefore remains an experiment boundary until that case is either given reliable creation-time provenance or its intended precedence is explicitly specified and tested.
+1. a global or target-specific `cmake.subproject_options().set_override_option('cuda_std', ...)` is known through `TargetOptions`, so the generated target uses the clean compile-argument list directly;
+2. otherwise the generated `cuda_args` value is a Meson ternary:
+   - if `get_option('cuda_std') == 'none'`, use the original raw list including the unexplained CMake fallback;
+   - otherwise use the clean list with only the discovered fallback removed.
+
+The branch pair is computed before the runtime choice, and removal operates on the converter-owned base list before `TargetOptions.append_compile_args()` is applied. This prevents an explicitly appended argument equal to the discovered fallback from being accidentally removed.
+
+This design preserves compile-argument ordering when fallback is needed and resolves ordinary Meson project/subproject authority at the stage where it is actually final.
 
 ### Policy D — propagate Meson standards into the generated CMake toolchain
 
 Status: `HOLD AS BROADER DESIGN`.
 
-Map Meson standards into CMake before configuration, then normalize the resulting effective flags.
+Mapping Meson standards into CMake before configuration would require a wider ownership redesign, including `c++*`/`gnu++*`, `none`, extension modes, compiler support, and precedence against target-level CMake settings. It is no longer the preferred next experiment.
 
-`CMakeInterpreter.configure()` constructs the CMake toolchain from the environment before File API analysis and does not receive `TargetOptions`; explicit `cmake.subproject_options()` target overrides are only applied later during Meson AST generation. Pushing all precedence into the toolchain would therefore require a broader ownership redesign and still needs mapping for `c++*`, `gnu++*`, `none`, extension modes, and compiler support.
+## Required next controls
 
-This is no longer the preferred next experiment.
-
-## Required next implementation controls
-
-The next candidate should be compiler-free first and must include all of these before any execution carrier is considered authoritative:
+The prepared transformer carries compiler-free controls for its local classification and branch-building helpers. Before any source can be described as a fix, execution must also prove the generated Meson runtime choice.
 
 | Case | Required outcome |
 | --- | --- |
-| no explicit CMake standard; Meson project `cuda_std=c++20` | exactly C++20; unexplained effective CMake flag is removed without creating a target override |
-| no explicit CMake standard; Meson `cuda_std=none` | retain the effective CMake `-std=` fallback |
-| explicit target `CUDA_STANDARD 17`; project C++20 | generated explicit target intent wins unless a later CMake-module override replaces it |
+| no explicit CMake standard; generated subproject `cuda_std=c++20` | clean args selected; no generated target override |
+| no explicit CMake standard; generated subproject `cuda_std=none` | original raw `-std=` fallback retained in place |
+| subproject `default_options: cuda_std=c++20` | same clean branch; proves late subproject resolution |
+| command-line or machine-file subproject `cuda_std` augment | clean branch; proves AST-generation timing is no longer authoritative |
+| explicit target `CUDA_STANDARD 17`; project C++20 | generated explicit target intent wins unless later CMake-module override replaces it |
 | direct target `-std=c++17`; project C++20 | explicit target compile-option intent is not silently lost |
 | explicit global `cmake.subproject_options()` C++23 | C++23 wins and no unexplained raw fallback survives |
 | target-specific `cmake.subproject_options()` C++23 | target C++23 wins over generated and fallback values |
-| global/directory `CMAKE_CUDA_STANDARD 17`; project C++20 | no production claim until target-creation provenance or intended precedence is explicit |
+| appended compile arg equal to fallback | appended arg survives cleanup |
+| GNU extension standard | extension form is preserved |
+| unsupported CUDA standard | raw flag is retained rather than silently dropped |
 | mixed CXX/CUDA target | C++ and CUDA standards remain independently classified |
-| GNU extension standards | extension mode is preserved rather than collapsed |
-| unsupported standard | no silent semantic loss |
+| global/directory `CMAKE_CUDA_STANDARD 17`; project C++20 | no production claim until target-creation provenance or intended precedence is explicit |
 
-One additional negative control is mandatory: an unexplained effective CUDA standard with `cuda_std=none` and no `TargetOptions` override must remain present after generated AST settlement.
+The mandatory negative control remains: unexplained effective CUDA standard + runtime `cuda_std=none` + no `TargetOptions` override must retain the effective standard.
 
 ## Current decision
 
-Keep source PR #3 in draft and research-only state.
+Keep source PR #3 draft and research-only.
 
 - Policy A remains executed classification evidence, not an issue fix.
-- Policy B is rejected before execution because it lacks replacement authority.
-- Policy C is now the narrowest viable experiment boundary because AST generation can see both the surrounding Meson option store and late `TargetOptions` authority.
-- No new execution carrier should be created until the deferred-settlement implementation and the no-authority negative control exist in source form.
+- Policy B is rejected because it lacks replacement authority.
+- Policy C1 is rejected because AST-generation OptionStore lookup is too early for subproject-scoped authority.
+- Policy C2 is the current candidate because the generated Meson program can query the final subproject option at execution time while still preserving explicit `TargetOptions` precedence.
+- The C2 transformer is prepared but unexecuted. Static review must finish before any read-only carrier is created.
 
-The current issue must not be described as resolved until both the reporter's parent-authority case and the no-replacement-authority compatibility case are preserved, and the directory/global CMake-standard caveat is explicitly settled or bounded.
+The issue must not be described as resolved until the reporter's parent-authority case, the no-replacement-authority compatibility case, and at least one genuinely subproject-scoped late-option case are executed successfully. The directory/global CMake-standard provenance caveat remains explicitly bounded.
