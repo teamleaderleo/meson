@@ -1,0 +1,23 @@
+F
+======================================================================
+FAIL: test_cuda_standard_is_normalized_as_cuda_override (unittests.cmakeinterpretertests.CMakeInterpreterTests.test_cuda_standard_is_normalized_as_cuda_override)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/meson/meson/candidate/unittests/cmakeinterpretertests.py", line 53, in test_cuda_standard_is_normalized_as_cuda_override
+    self.assertEqual(converter.override_options, ['cuda_std=c++17'])
+AssertionError: Lists differ: [] != ['cuda_std=c++17']
+
+Second list contains 1 additional elements.
+First extra element 0:
+'cuda_std=c++17'
+
+- []
++ ['cuda_std=c++17']
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+Meson build system 1.12.0.rc2 Unit Tests
+pytest not found, using unittest instead
+Total time: 0.728 seconds
