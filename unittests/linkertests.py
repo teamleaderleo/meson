@@ -72,11 +72,12 @@ class BfdLinkerTests(BasePlatformTests):
                     str(hostile_src), '-o', str(hostile_lib),
                 ])
 
-            env = {
-                'CC_LD': 'bfd',
-                'LD_LIBRARY_PATH': hostile_dir,
-            }
-            self.init(testdir, override_envvars=env)
+            env = {'CC_LD': 'bfd'}
+            self.init(
+                testdir,
+                extra_args=[f'-Dhostile_rpath={hostile_dir}'],
+                override_envvars=env,
+            )
             compiler_info = self.introspect('--compilers')['host']['c']
             if compiler_info['linker_id'] != 'ld.bfd':
                 raise SkipTest(f"configured linker is {compiler_info['linker_id']}, not ld.bfd")

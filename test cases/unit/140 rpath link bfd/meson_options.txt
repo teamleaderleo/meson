@@ -1,0 +1,1 @@
+option('hostile_rpath', type : 'string', value : '')
