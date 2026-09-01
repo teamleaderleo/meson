@@ -1,63 +1,35 @@
-name: Fieldwork Meson ld.bfd final rebase verify
+name: Fieldwork Meson ld.bfd final verify
 
 on:
   push:
     branches:
-      - fieldwork/16087-rebase-verify
+      - fieldwork/16087-final-verify
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  rebase-verify:
+  verify:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Rebase the reviewed patch onto current upstream
+      - name: Verify the exact rebased candidate
         shell: bash
         run: |
           set -euo pipefail
+          candidate=ed3d0bcccfb713e369ee4fddb95da23e825b72b1
+          upstream=be6841aab8318b61b620c6c9375137570a01b89d
+          test "$(git rev-parse HEAD^)" = "$candidate"
+          git checkout --detach "$candidate"
+          test "$(git rev-parse HEAD^)" = "$upstream"
+          git diff --check "$upstream" "$candidate"
 
-          old_head=f922ee286cebde91dbaf948d06eb14be226a3f8e
-          old_base=cb59331b47aa1e502d5b49d92e7c75bdf7829e61
-          upstream_head=be6841a8bcd3363345354711a683acf38310a664
-
-          git remote add upstream https://github.com/mesonbuild/meson.git
-          git fetch upstream master
-          test "$(git rev-parse upstream/master)" = "$upstream_head"
-
-          git fetch origin fieldwork/16087-bfd-rpath-link
-          git checkout -B candidate origin/fieldwork/16087-bfd-rpath-link
-          test "$(git rev-parse HEAD)" = "$old_head"
-          test "$(git rev-parse HEAD^)" = "$old_base"
-
-          git diff --binary "$old_base" "$old_head" > /tmp/reviewed.patch
-          git rebase --onto "$upstream_head" "$old_base" candidate
-          test "$(git rev-parse HEAD^)" = "$upstream_head"
-          git diff --binary "$upstream_head" HEAD > /tmp/rebased.patch
-          cmp /tmp/reviewed.patch /tmp/rebased.patch
-          git diff --check "$upstream_head" HEAD
-
-          echo "REBASed_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-
-      - name: Run focused final proof
-        shell: bash
-        run: |
-          set -euo pipefail
           python3 run_unittests.py LinkerTests.test_gnuld_rpath_link_version_gate
           python3 run_unittests.py BfdLinkerTests.test_rpath_link_transitive_dependency | tee /tmp/integration.txt
           ! grep -Fq 'skipped=' /tmp/integration.txt
           python3 run_unittests.py InternalTests.test_compiler_args_class_gnuld
           python3 -m compileall -q mesonbuild/linkers/linkers.py unittests/linkertests.py
-          git diff --check HEAD^ HEAD
-
-      - name: Publish rebased candidate to the fork
-        shell: bash
-        run: |
-          set -euo pipefail
-          git push --force-with-lease=refs/heads/fieldwork/16087-bfd-rpath-link:f922ee286cebde91dbaf948d06eb14be226a3f8e \
-            origin HEAD:refs/heads/fieldwork/16087-bfd-rpath-link
-          echo "rebased candidate: $(git rev-parse HEAD)"
+          git diff --check "$upstream" "$candidate"
