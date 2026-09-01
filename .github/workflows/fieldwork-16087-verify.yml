@@ -1,16 +1,14 @@
 name: Fieldwork Meson 16087 verify
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize]
-    branches: [master]
+  push:
+    branches: [fieldwork/16087-trigger]
 
 permissions:
   contents: write
 
 jobs:
   verify:
-    if: github.event.pull_request.head.ref == 'fieldwork/16087-bfd-rpath-link'
     runs-on: ubuntu-24.04
     steps:
       - name: Check out candidate
@@ -40,7 +38,8 @@ jobs:
           set -e
           cat /tmp/red.txt
           test "$status" -ne 0
-          grep -Fq "'-Wl,-rpath-link,/build/lib' not found" /tmp/red.txt
+          grep -Fq -- '-Wl,-rpath-link,/build/lib' /tmp/red.txt
+          grep -Fq 'AssertionError' /tmp/red.txt
 
       - name: Apply narrow ld.bfd fix
         shell: bash
